@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import sql from '../db/client';
 import { errorResponse } from '../middleware/errorHandler';
@@ -13,9 +12,11 @@ const voteBody = z.object({
   round_number: z.number().int().positive(),
 });
 
-votes.post('/:room_code/votes', zValidator('json', voteBody), async (c) => {
+votes.post('/:room_code/votes', async (c) => {
   const room_code = c.req.param('room_code').toUpperCase();
-  const { participant_id, game_ids, round_number } = c.req.valid('json');
+  const parsed = voteBody.safeParse(await c.req.json());
+  if (!parsed.success) return errorResponse(c, 400, parsed.error.issues[0].message);
+  const { participant_id, game_ids, round_number } = parsed.data;
 
   const [session] = await sql`SELECT * FROM sessions WHERE room_code = ${room_code}`;
   if (!session) return errorResponse(c, 404, 'Session not found');
@@ -24,7 +25,6 @@ votes.post('/:room_code/votes', zValidator('json', voteBody), async (c) => {
     return errorResponse(c, 400, `You can only vote for ${session.votes_per_round} game(s)`);
   }
 
-  // Delete previous votes for this participant this round (allow re-submission)
   await sql`
     DELETE FROM votes
     WHERE session_id = ${session.id}
@@ -38,14 +38,12 @@ votes.post('/:room_code/votes', zValidator('json', voteBody), async (c) => {
     ON CONFLICT DO NOTHING
   `;
 
-  // Check if all participants have voted → flip to results
   const [{ total }] = await sql`
     SELECT COUNT(*)::int AS total FROM participants WHERE session_id = ${session.id}
   `;
   const [{ voted }] = await sql`
     SELECT COUNT(DISTINCT participant_id)::int AS voted
-    FROM votes
-    WHERE session_id = ${session.id} AND round_number = ${round_number}
+    FROM votes WHERE session_id = ${session.id} AND round_number = ${round_number}
   `;
 
   if (voted >= total) {

@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import sql from '../db/client';
 import { errorResponse } from '../middleware/errorHandler';
@@ -22,8 +21,10 @@ lists.get('/', async (c) => {
   return c.json(rows);
 });
 
-lists.post('/', zValidator('json', listBody), async (c) => {
-  const { name, game_ids } = c.req.valid('json');
+lists.post('/', async (c) => {
+  const parsed = listBody.safeParse(await c.req.json());
+  if (!parsed.success) return errorResponse(c, 400, parsed.error.issues[0].message);
+  const { name, game_ids } = parsed.data;
   const [list] = await sql`INSERT INTO lists (name) VALUES (${name}) RETURNING *`;
   await sql`
     INSERT INTO list_games (list_id, game_id)
@@ -46,9 +47,11 @@ lists.get('/:id', async (c) => {
   return c.json({ ...list, games });
 });
 
-lists.put('/:id', zValidator('json', listBody), async (c) => {
+lists.put('/:id', async (c) => {
   const id = Number(c.req.param('id'));
-  const { name, game_ids } = c.req.valid('json');
+  const parsed = listBody.safeParse(await c.req.json());
+  if (!parsed.success) return errorResponse(c, 400, parsed.error.issues[0].message);
+  const { name, game_ids } = parsed.data;
   const rows = await sql`UPDATE lists SET name = ${name} WHERE id = ${id} RETURNING *`;
   if (rows.length === 0) return errorResponse(c, 404, 'List not found');
   await sql`DELETE FROM list_games WHERE list_id = ${id}`;
